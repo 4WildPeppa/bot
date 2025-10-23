@@ -148,60 +148,87 @@ def analyze_image_colors(image_path):
         img_array = np.array(img)
         img_normalized = img_array / 255.0
         
+        # Более точные маски цветов
+        # Серые цвета (волчья шерсть) - более строгие критерии
         gray_mask = (
-            (img_normalized[:,:,0] > 0.2) & (img_normalized[:,:,0] < 0.8) &
-            (img_normalized[:,:,1] > 0.2) & (img_normalized[:,:,1] < 0.8) &
-            (img_normalized[:,:,2] > 0.2) & (img_normalized[:,:,2] < 0.8) &
-            (np.abs(img_normalized[:,:,0] - img_normalized[:,:,1]) < 0.2) &
-            (np.abs(img_normalized[:,:,1] - img_normalized[:,:,2]) < 0.2)
+            (img_normalized[:,:,0] > 0.3) & (img_normalized[:,:,0] < 0.7) &
+            (img_normalized[:,:,1] > 0.3) & (img_normalized[:,:,1] < 0.7) &
+            (img_normalized[:,:,2] > 0.3) & (img_normalized[:,:,2] < 0.7) &
+            (np.abs(img_normalized[:,:,0] - img_normalized[:,:,1]) < 0.15) &
+            (np.abs(img_normalized[:,:,1] - img_normalized[:,:,2]) < 0.15)
         )
         
-        brown_mask = (
-            (img_normalized[:,:,0] > 0.4) & (img_normalized[:,:,0] < 0.8) &
-            (img_normalized[:,:,1] > 0.3) & (img_normalized[:,:,1] < 0.6) &
-            (img_normalized[:,:,2] > 0.2) & (img_normalized[:,:,2] < 0.4)
+        # Коричневые/бежевые (человеческая кожа, одежда) - расширенные
+        skin_brown_mask = (
+            # Кожа человека
+            ((img_normalized[:,:,0] > 0.5) & (img_normalized[:,:,0] < 0.9) &
+             (img_normalized[:,:,1] > 0.35) & (img_normalized[:,:,1] < 0.7) &
+             (img_normalized[:,:,2] > 0.2) & (img_normalized[:,:,2] < 0.5)) |
+            # Одежда (синие, красные, зеленые тона)
+            ((img_normalized[:,:,0] > 0.1) & (img_normalized[:,:,0] < 0.8) &
+             (img_normalized[:,:,1] > 0.1) & (img_normalized[:,:,1] < 0.8) &
+             (img_normalized[:,:,2] > 0.1) & (img_normalized[:,:,2] < 0.8) &
+             (np.abs(img_normalized[:,:,0] - img_normalized[:,:,1]) > 0.2) |
+             (np.abs(img_normalized[:,:,1] - img_normalized[:,:,2]) > 0.2))
         )
         
+        # Белые цвета (только чистый белый, не серый)
         white_mask = (
-            (img_normalized[:,:,0] > 0.7) &
-            (img_normalized[:,:,1] > 0.7) &
-            (img_normalized[:,:,2] > 0.7)
+            (img_normalized[:,:,0] > 0.85) &
+            (img_normalized[:,:,1] > 0.85) &
+            (img_normalized[:,:,2] > 0.85)
         )
         
+        # Черные цвета (только чистый черный)
         black_mask = (
-            (img_normalized[:,:,0] < 0.3) &
-            (img_normalized[:,:,1] < 0.3) &
-            (img_normalized[:,:,2] < 0.3)
+            (img_normalized[:,:,0] < 0.15) &
+            (img_normalized[:,:,1] < 0.15) &
+            (img_normalized[:,:,2] < 0.15)
         )
         
         total_pixels = img_array.shape[0] * img_array.shape[1]
-        gray_pixels = np.sum(gray_mask)
-        brown_pixels = np.sum(brown_mask)
-        white_pixels = np.sum(white_mask)
-        black_pixels = np.sum(black_mask)
         
-        gray_percent = (gray_pixels / total_pixels) * 100
-        brown_percent = (brown_pixels / total_pixels) * 100
-        white_percent = (white_pixels / total_pixels) * 100
-        black_percent = (black_pixels / total_pixels) * 100
+        # Считаем проценты
+        gray_percent = (np.sum(gray_mask) / total_pixels) * 100
+        human_percent = (np.sum(skin_brown_mask) / total_pixels) * 100
+        white_percent = (np.sum(white_mask) / total_pixels) * 100
+        black_percent = (np.sum(black_mask) / total_pixels) * 100
         
-        wolf_score = gray_percent + black_percent + (white_percent * 0.5)
-        human_score = brown_percent
+        # Улучшенная логика классификации
+        wolf_score = (gray_percent * 1.5) + (black_percent * 1.2) + (white_percent * 0.8)
+        human_score = human_percent * 2.0  # Увеличиваем вес человеческих цветов
         
-        if wolf_score > human_score:
-            confidence = wolf_score / (wolf_score + human_score) * 100
-            result = f"🐺 Это волк! (уверенность: {confidence:.1f}%)"
+        # Балансируем оценку
+        total_score = wolf_score + human_score
+        if total_score == 0:
+            return "🤔 Не могу определить. Изображение слишком сложное для анализа."
+        
+        wolf_confidence = (wolf_score / total_score) * 100
+        human_confidence = (human_score / total_score) * 100
+        
+        # Более высокий порог для волка
+        if wolf_confidence > 60:  # Было 50%
+            result = f"🐺 Это волк! (уверенность: {wolf_confidence:.1f}%)"
+        elif human_confidence > 40:  # Было 50%
+            result = f"👤 Это человек! (уверенность: {human_confidence:.1f}%)"
         else:
-            confidence = human_score / (wolf_score + human_score) * 100
-            result = f"👤 Это человек! (уверенность: {confidence:.1f}%)"
+            result = f"🤷 Не уверен... (волк: {wolf_confidence:.1f}%, человек: {human_confidence:.1f}%)"
         
+        details = (
+            f"\n\n📊 Детальный анализ:\n"
+            f"• Серые оттенки (волк): {gray_percent:.1f}%\n"
+            f"• Человеческие цвета: {human_percent:.1f}%\n"
+            f"• Черные оттенки (волк): {black_percent:.1f}%\n"
+            f"• Белые оттенки: {white_percent:.1f}%\n"
+            f"• Всего пикселей: {total_pixels:,}\n"
+            f"• Оценка волка: {wolf_score:.1f}\n"
+            f"• Оценка человека: {human_score:.1f}"
+        )
         
-        
-        return result 
+        return result + details
         
     except Exception as e:
         return f"Ошибка при анализе изображения: {e}"
-
 # Обработчики команд бота
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
