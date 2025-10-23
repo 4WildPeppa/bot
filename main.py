@@ -188,18 +188,14 @@ def analyze_image_colors(image_path):
         wolf_pixels = np.sum(true_gray) + np.sum(dark_gray) + np.sum(wolf_brown)
         wolf_percentage = (wolf_pixels / total_pixels) * 100
         
-        # Вычисляем проценты для человека
-        human_percentage = 100 - wolf_percentage
-        
-        # Всегда показываем проценты, но меняем текст
+        # ПРОСТАЯ И ПОНЯТНАЯ ЛОГИКА
         if wolf_percentage > 25:
-            return f"🐺 Да, это волк! (волк: {wolf_percentage:.1f}%, человек: {human_percentage:.1f}%)"
+            return f"🐺 Это волк! (уверенность: {wolf_percentage:.1f}%)"
         elif wolf_percentage > 15:
-            return f"🐺 Возможно волк (волк: {wolf_percentage:.1f}%, человек: {human_percentage:.1f}%)"
-        elif wolf_percentage > 8:
-            return f"Сложно определить (волк: {wolf_percentage:.1f}%, человек: {human_percentage:.1f}%)"
+            return f"🐺 Возможно волк (уверенность: {wolf_percentage:.1f}%)"
         else:
-            return f"Это человек! (человек: {human_percentage:.1f}%, волк: {wolf_percentage:.1f}%)"
+            human_confidence = 100 - wolf_percentage
+            return f"👤 Это человек! (уверенность: {human_confidence:.1f}%)"
         
     except Exception as e:
         return f"Ошибка при обработке изображения: {e}"
