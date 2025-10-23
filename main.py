@@ -138,77 +138,71 @@ def add_admin(chat_id, added_by):
     cur.close()
     conn.close()
 
-# Функция анализа изображения
 def analyze_image_colors(image_path):
     try:
         img = Image.open(image_path)
         if img.mode != 'RGB':
             img = img.convert('RGB')
         
-        # Уменьшаем изображение для анализа текстур
-        img_small = img.resize((150, 150))
-        img_array = np.array(img_small)
+        img_array = np.array(img)
+        height, width = img_array.shape[:2]
         img_normalized = img_array / 255.0
         
-        # Анализируем по зонам
-        height, width = img_normalized.shape[:2]
+        # Фокусируемся на центральной части
+        center_h_start = height // 4
+        center_h_end = height * 3 // 4
+        center_w_start = width // 4
+        center_w_end = width * 3 // 4
         
-        # Зональный анализ (центр важнее)
-        zones = [
-            (height//4, height*3//4, width//4, width*3//4, 2.0),  # Центр ×2
-            (height//6, height*5//6, width//6, width*5//6, 1.5),  # Средняя ×1.5
-            (0, height, 0, width, 1.0)  # Вся картинка ×1
-        ]
+        center_zone = img_normalized[center_h_start:center_h_end, center_w_start:center_w_end]
         
-        total_wolf_score = 0
-        total_weight = 0
+        if center_zone.size == 0:
+            return "🤔 Не могу проанализировать изображение"
         
-        for h_start, h_end, w_start, w_end, weight in zones:
-            zone = img_normalized[h_start:h_end, w_start:w_end]
-            if zone.size == 0:
-                continue
-                
-            # СУПЕР-строгие волчьи цвета
-            wolf_colors = (
-                # Идеальные серые (как шерсть)
-                ((zone[:,:,0] > 0.4) & (zone[:,:,0] < 0.6) &
-                 (zone[:,:,1] > 0.4) & (zone[:,:,1] < 0.6) &
-                 (zone[:,:,2] > 0.4) & (zone[:,:,2] < 0.6) &
-                 (np.abs(zone[:,:,0] - zone[:,:,1]) < 0.08) &
-                 (np.abs(zone[:,:,1] - zone[:,:,2]) < 0.08)) |
-                
-                # Темные серые (тени на шерсти)
-                ((zone[:,:,0] > 0.2) & (zone[:,:,0] < 0.45) &
-                 (zone[:,:,1] > 0.2) & (zone[:,:,1] < 0.45) &
-                 (zone[:,:,2] > 0.2) & (zone[:,:,2] < 0.45) &
-                 (np.abs(zone[:,:,0] - zone[:,:,1]) < 0.12) &
-                 (np.abs(zone[:,:,1] - zone[:,:,2]) < 0.12))
-            )
-            
-            wolf_pixels = np.sum(wolf_colors)
-            zone_pixels = zone.shape[0] * zone.shape[1]
-            wolf_score = (wolf_pixels / zone_pixels) * weight
-            
-            total_wolf_score += wolf_score
-            total_weight += weight
+        # Строгие волчьи цвета
+        true_gray = (
+            (center_zone[:,:,0] > 0.35) & (center_zone[:,:,0] < 0.65) &
+            (center_zone[:,:,1] > 0.35) & (center_zone[:,:,1] < 0.65) &
+            (center_zone[:,:,2] > 0.35) & (center_zone[:,:,2] < 0.65) &
+            (np.abs(center_zone[:,:,0] - center_zone[:,:,1]) < 0.1) &
+            (np.abs(center_zone[:,:,1] - center_zone[:,:,2]) < 0.1)
+        )
         
-        if total_weight == 0:
-            return "🤔 Не могу проанализировать"
+        dark_gray = (
+            (center_zone[:,:,0] > 0.15) & (center_zone[:,:,0] < 0.4) &
+            (center_zone[:,:,1] > 0.15) & (center_zone[:,:,1] < 0.4) &
+            (center_zone[:,:,2] > 0.15) & (center_zone[:,:,2] < 0.4) &
+            (np.abs(center_zone[:,:,0] - center_zone[:,:,1]) < 0.15) &
+            (np.abs(center_zone[:,:,1] - center_zone[:,:,2]) < 0.15)
+        )
         
-        final_score = (total_wolf_score / total_weight) * 100
+        wolf_brown = (
+            (center_zone[:,:,0] > 0.4) & (center_zone[:,:,0] < 0.7) &
+            (center_zone[:,:,1] > 0.3) & (center_zone[:,:,1] < 0.6) &
+            (center_zone[:,:,2] > 0.2) & (center_zone[:,:,2] < 0.5) &
+            (center_zone[:,:,0] > center_zone[:,:,1]) &
+            (center_zone[:,:,1] > center_zone[:,:,2])
+        )
         
-        # ОЧЕНЬ высокие пороги
-        if final_score > 30:
-            return f"🐺 ДА, ЭТО ВОЛК! (четкие признаки: {final_score:.1f}%)"
-        elif final_score > 20:
-            return f"🐺 Скорее всего волк (признаки: {final_score:.1f}%)"
-        elif final_score > 12:
-            return f"🤔 Возможно волк (слабые признаки: {final_score:.1f}%)"
+        total_pixels = center_zone.shape[0] * center_zone.shape[1]
+        wolf_pixels = np.sum(true_gray) + np.sum(dark_gray) + np.sum(wolf_brown)
+        wolf_percentage = (wolf_pixels / total_pixels) * 100
+        
+        # Вычисляем проценты для человека
+        human_percentage = 100 - wolf_percentage
+        
+        # Всегда показываем проценты, но меняем текст
+        if wolf_percentage > 25:
+            return f"🐺 Да, это волк! (волк: {wolf_percentage:.1f}%, человек: {human_percentage:.1f}%)"
+        elif wolf_percentage > 15:
+            return f"🐺 Возможно волк (волк: {wolf_percentage:.1f}%, человек: {human_percentage:.1f}%)"
+        elif wolf_percentage > 8:
+            return f"Сложно определить (волк: {wolf_percentage:.1f}%, человек: {human_percentage:.1f}%)"
         else:
-            return f"👤 Не волк (признаков: {final_score:.1f}%)"
+            return f"Это человек! (человек: {human_percentage:.1f}%, волк: {wolf_percentage:.1f}%)"
         
     except Exception as e:
-        return f"Ошибка при анализе изображения: {e}"
+        return f"Ошибка при обработке изображения: {e}"
 # Обработчики команд бота
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
