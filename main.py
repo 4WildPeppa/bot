@@ -1,43 +1,63 @@
 import os
-import sqlite3
-import json
+import psycopg2
 from datetime import datetime
 import telebot
 from flask import Flask, request
 from PIL import Image
 import numpy as np
+import urllib.parse as urlparse
 
 # Токен бота
 TOKEN = os.environ.get('BOT_TOKEN', '7530748232:AAF8T5Zsoa-LzqsP9T0gt5hEWYtxBhB3iLE')
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
+# Подключение к PostgreSQL
+def get_db_connection():
+    database_url = os.environ.get('DATABASE_URL')
+    
+    if database_url:
+        url = urlparse.urlparse(database_url)
+        dbname = url.path[1:]
+        user = url.username
+        password = url.password
+        host = url.hostname
+        port = url.port
+        
+        conn = psycopg2.connect(
+            dbname=dbname,
+            user=user,
+            password=password,
+            host=host,
+            port=port,
+            sslmode='require'
+        )
+    else:
+        conn = psycopg2.connect(
+            dbname='wolf_bot',
+            user='postgres',
+            password='password',
+            host='localhost'
+        )
+    
+    return conn
+
 # Инициализация базы данных
 def init_db():
-    conn = sqlite3.connect('users.db', check_same_thread=False)
+    conn = get_db_connection()
     c = conn.cursor()
     
-    # Таблица пользователей
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (chat_id INTEGER PRIMARY KEY,
-                  username TEXT,
-                  password TEXT,
-                  registered_at TEXT,
-                  logged_in BOOLEAN DEFAULT FALSE,
-                  predictions_count INTEGER DEFAULT 0,
-                  is_admin BOOLEAN DEFAULT FALSE)''')
-    
-    # Таблица администраторов
-    c.execute('''CREATE TABLE IF NOT EXISTS admins
-                 (chat_id INTEGER PRIMARY KEY,
-                  added_by INTEGER,
-                  added_at TEXT)''')
-    
-    # Проверяем, есть ли администраторы
-    c.execute("SELECT COUNT(*) FROM users WHERE is_admin = TRUE")
-    if c.fetchone()[0] == 0:
-        # Первый пользователь станет администратором
-        print("Нет администраторов. Первый зарегистрированный пользователь станет админом.")
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            chat_id BIGINT PRIMARY KEY,
+            username TEXT,
+            password TEXT,
+            registered_at TIMESTAMP,
+            logged_in BOOLEAN DEFAULT FALSE,
+            predictions_count INTEGER DEFAULT 0,
+            is_admin BOOLEAN DEFAULT FALSE
+        )
+    ''')
     
     conn.commit()
     conn.close()
@@ -45,31 +65,21 @@ def init_db():
 init_db()
 
 # Функции для работы с базой данных
-def get_db_connection():
-    conn = sqlite3.connect('users.db', check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
 def add_user(chat_id, username, password):
     conn = get_db_connection()
     c = conn.cursor()
     
-    # Проверяем, первый ли это пользователь
     c.execute("SELECT COUNT(*) FROM users")
     user_count = c.fetchone()[0]
-    
     is_first_user = user_count == 0
     
-    c.execute('''INSERT OR REPLACE INTO users 
-                 (chat_id, username, password, registered_at, is_admin) 
-                 VALUES (?, ?, ?, ?, ?)''',
-              (chat_id, username, password, datetime.now().isoformat(), is_first_user))
-    
-    if is_first_user:
-        c.execute('''INSERT OR REPLACE INTO admins (chat_id, added_by, added_at)
-                     VALUES (?, ?, ?)''',
-                  (chat_id, chat_id, datetime.now().isoformat()))
-        print(f"Пользователь {chat_id} назначен первым администратором")
+    c.execute('''
+        INSERT INTO users (chat_id, username, password, registered_at, is_admin) 
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (chat_id) DO UPDATE SET
+        username = EXCLUDED.username,
+        password = EXCLUDED.password
+    ''', (chat_id, username, password, datetime.now(), is_first_user))
     
     conn.commit()
     conn.close()
@@ -77,50 +87,49 @@ def add_user(chat_id, username, password):
 
 def get_user(chat_id):
     conn = get_db_connection()
-    user = conn.execute('SELECT * FROM users WHERE chat_id = ?', (chat_id,)).fetchone()
+    c = conn.cursor()
+    c.execute('SELECT * FROM users WHERE chat_id = %s', (chat_id,))
+    user = c.fetchone()
     conn.close()
     return user
 
-def update_user_password(chat_id, password):
-    conn = get_db_connection()
-    conn.execute('UPDATE users SET password = ? WHERE chat_id = ?', (password, chat_id))
-    conn.commit()
-    conn.close()
-
 def update_login_status(chat_id, status):
     conn = get_db_connection()
-    conn.execute('UPDATE users SET logged_in = ? WHERE chat_id = ?', (status, chat_id))
+    c = conn.cursor()
+    c.execute('UPDATE users SET logged_in = %s WHERE chat_id = %s', (status, chat_id))
     conn.commit()
     conn.close()
 
 def increment_predictions(chat_id):
     conn = get_db_connection()
-    conn.execute('UPDATE users SET predictions_count = predictions_count + 1 WHERE chat_id = ?', (chat_id,))
+    c = conn.cursor()
+    c.execute('UPDATE users SET predictions_count = predictions_count + 1 WHERE chat_id = %s', (chat_id,))
     conn.commit()
     conn.close()
 
 def is_admin(chat_id):
     user = get_user(chat_id)
-    return user and user['is_admin']
+    return user and user[6]
 
 def get_all_users():
     conn = get_db_connection()
-    users = conn.execute('SELECT * FROM users ORDER BY registered_at DESC').fetchall()
+    c = conn.cursor()
+    c.execute('SELECT * FROM users ORDER BY registered_at DESC')
+    users = c.fetchall()
     conn.close()
     return users
 
 def delete_user(chat_id):
     conn = get_db_connection()
-    conn.execute('DELETE FROM users WHERE chat_id = ?', (chat_id,))
-    conn.execute('DELETE FROM admins WHERE chat_id = ?', (chat_id,))
+    c = conn.cursor()
+    c.execute('DELETE FROM users WHERE chat_id = %s', (chat_id,))
     conn.commit()
     conn.close()
 
 def add_admin(chat_id, added_by):
     conn = get_db_connection()
-    conn.execute('UPDATE users SET is_admin = TRUE WHERE chat_id = ?', (chat_id,))
-    conn.execute('INSERT OR REPLACE INTO admins (chat_id, added_by, added_at) VALUES (?, ?, ?)',
-                 (chat_id, added_by, datetime.now().isoformat()))
+    c = conn.cursor()
+    c.execute('UPDATE users SET is_admin = TRUE WHERE chat_id = %s', (chat_id,))
     conn.commit()
     conn.close()
 
@@ -134,7 +143,6 @@ def analyze_image_colors(image_path):
         img_array = np.array(img)
         img_normalized = img_array / 255.0
         
-        # Цветовые маски
         gray_mask = (
             (img_normalized[:,:,0] > 0.2) & (img_normalized[:,:,0] < 0.8) &
             (img_normalized[:,:,1] > 0.2) & (img_normalized[:,:,1] < 0.8) &
@@ -177,14 +185,14 @@ def analyze_image_colors(image_path):
         
         if wolf_score > human_score:
             confidence = wolf_score / (wolf_score + human_score) * 100
-            result = f"🐺 Это волк! (уверенность: {confidence:.1f}%)"
+            result = f"Это волк! (уверенность: {confidence:.1f}%)"
         else:
             confidence = human_score / (wolf_score + human_score) * 100
-            result = f"👤 Это человек! (уверенность: {confidence:.1f}%)"
+            result = f"Это человек! (уверенность: {confidence:.1f}%)"
         
         
         
-        return result
+        return result 
         
     except Exception as e:
         return f"Ошибка при анализе изображения: {e}"
@@ -193,7 +201,7 @@ def analyze_image_colors(image_path):
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user = get_user(message.chat.id)
-    if user and user['is_admin']:
+    if user and user[6]:
         welcome_text = (
             "Приветствуем тебя, Вожак стаи! 🐺👑\n"
             "Ты обладаешь силой управлять стаей.\n\n"
@@ -221,6 +229,10 @@ def send_welcome(message):
             "Начни с команды /register."
         )
     bot.reply_to(message, welcome_text)
+
+@bot.message_handler(func=lambda message: 'спасибо' in message.text.lower())
+def thank_you_response(message):
+    bot.reply_to(message, "Стая с тобой навсегда! 🐺")
 
 @bot.message_handler(commands=['register'])
 def register_user(message):
@@ -252,6 +264,19 @@ def process_register_password(message):
     
     bot.reply_to(message, response)
 
+@bot.message_handler(commands=['instructions'])
+def send_instructions(message):
+    instructions_text = (
+        "Что же, ищущий да обрящет!\n\n"
+        "Команды:\n"
+        "🐺 /register — присоединиться к стае\n"
+        "🐺 /login — войти в стаю\n"
+        "🐺 /predict — отправить изображение\n"
+        "🐺 /logout — покинуть стаю\n\n"
+        "Просто отправь мне фото или используй /predict!"
+    )
+    bot.reply_to(message, instructions_text)
+
 @bot.message_handler(commands=['login'])
 def login_user(message):
     chat_id = message.chat.id
@@ -261,7 +286,7 @@ def login_user(message):
         bot.reply_to(message, "Ты еще не в стае. Используй /register")
         return
     
-    if user['logged_in']:
+    if user[4]:  # logged_in
         bot.reply_to(message, "Ты уже в стае, брат мой.")
         return
     
@@ -273,7 +298,7 @@ def process_login_password(message):
     password = message.text.strip()
     user = get_user(chat_id)
     
-    if user and user['password'] == password:
+    if user and user[2] == password:  # password field
         update_login_status(chat_id, True)
         bot.reply_to(message, "Поздравляем, ты в стае! Используй /predict для анализа изображений.")
     else:
@@ -284,7 +309,7 @@ def logout_user(message):
     chat_id = message.chat.id
     user = get_user(chat_id)
     
-    if user and user['logged_in']:
+    if user and user[4]:  # logged_in
         update_login_status(chat_id, False)
         bot.reply_to(message, "Спокойной ночи, волк. Возвращайся в стаю!")
     else:
@@ -299,7 +324,7 @@ def predict(message):
         bot.reply_to(message, "Сначала присоединись к стае через /register")
         return
     
-    if not user['logged_in']:
+    if not user[4]:  # logged_in
         bot.reply_to(message, "Сначала войди в стаю через /login")
         return
     
@@ -315,10 +340,10 @@ def admin_panel(message):
         return
     
     admin_text = (
-        "👑 Панель Вожака стаи:\n\n"
+        "Панель Вожака стаи:\n\n"
         "Статистика:\n"
         "• /stats - Общая статистика\n\n"
-        "🐺 Управление волками:\n"
+        "Управление волками:\n"
         "• /users - Список всей стаи\n"
         "• /add_admin - Добавить Вожака\n"
         "• /delete_user - Изгнать из стаи\n\n"
@@ -336,9 +361,9 @@ def show_stats(message):
     
     users = get_all_users()
     total_users = len(users)
-    total_predictions = sum(user['predictions_count'] for user in users)
-    active_users = sum(1 for user in users if user['logged_in'])
-    admins_count = sum(1 for user in users if user['is_admin'])
+    total_predictions = sum(user[5] for user in users)  # predictions_count
+    active_users = sum(1 for user in users if user[4])  # logged_in
+    admins_count = sum(1 for user in users if user[6])  # is_admin
     
     stats_text = (
         f"Статистика стаи:\n\n"
@@ -366,14 +391,14 @@ def show_users(message):
     
     users_text = "🐺 Вся стая:\n\n"
     for i, user in enumerate(users, 1):
-        status = "В стае" if user['logged_in'] else "Не в стае"
-        admin_flag = "" if user['is_admin'] else ""
+        status = "В стае" if user[4] else "Не в стае"  # logged_in
+        admin_flag = " 👑" if user[6] else ""  # is_admin
         users_text += (
-            f"{i}. {user['username'] or 'Без имени'}{admin_flag}\n"
-            f"   ID: {user['chat_id']}\n"
+            f"{i}. {user[1] or 'Без имени'}{admin_flag}\n"
+            f"   ID: {user[0]}\n"
             f"   Статус: {status}\n"
-            f"   Анализов: {user['predictions_count']}\n"
-            f"   В стае с: {user['registered_at'][:10]}\n\n"
+            f"   Анализов: {user[5]}\n"
+            f"   В стае с: {user[3].strftime('%Y-%m-%d') if user[3] else 'N/A'}\n\n"
         )
     
     users_text += "Для удаления используй /delete_user [ID]"
@@ -387,7 +412,6 @@ def delete_user_cmd(message):
         bot.reply_to(message, "Только Вожак может изгонять из стаи.")
         return
     
-    # Проверяем, передан ли ID пользователя
     command_parts = message.text.split()
     if len(command_parts) == 2:
         try:
@@ -398,12 +422,12 @@ def delete_user_cmd(message):
                 bot.reply_to(message, "Волк с таким ID не найден.")
                 return
             
-            if user_to_delete['is_admin']:
+            if user_to_delete[6]:  # is_admin
                 bot.reply_to(message, "Нельзя изгнать Вожака стаи.")
                 return
             
             delete_user(user_id_to_delete)
-            bot.reply_to(message, f"Волк {user_to_delete['username']} изгнан из стаи.")
+            bot.reply_to(message, f"Волк {user_to_delete[1]} изгнан из стаи.")
             
         except ValueError:
             bot.reply_to(message, "Неверный формат ID. Используй: /delete_user [ID]")
@@ -432,12 +456,12 @@ def process_add_admin(message):
             bot.reply_to(message, "Волк с таким ID не найден.")
             return
         
-        if new_admin_user['is_admin']:
+        if new_admin_user[6]:  # is_admin
             bot.reply_to(message, "Этот волк уже Вожак.")
             return
         
         add_admin(new_admin_id, chat_id)
-        bot.reply_to(message, f"{new_admin_user['username']} теперь Вожак стаи 👑")
+        bot.reply_to(message, f"{new_admin_user[1]} теперь Вожак стаи! 👑")
         
     except ValueError:
         bot.reply_to(message, "Неверный формат ID.")
@@ -447,12 +471,12 @@ def process_image_prediction(message):
     chat_id = message.chat.id
     user = get_user(chat_id)
     
-    if not user or not user['logged_in']:
+    if not user or not user[4]:  # logged_in
         bot.reply_to(message, "Сначала войди в стаю через /login")
         return
     
     try:
-        #bot.reply_to(message, "🔍 Анализирую цвета...")
+        bot.reply_to(message, "🔍 Анализирую цвета...")
         
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
