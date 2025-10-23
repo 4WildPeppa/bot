@@ -146,86 +146,85 @@ def analyze_image_colors(image_path):
             img = img.convert('RGB')
         
         img_array = np.array(img)
+        height, width = img_array.shape[:2]
         img_normalized = img_array / 255.0
         
-        # Более точные маски цветов
-        # Серые цвета (волчья шерсть) - более строгие критерии
-        gray_mask = (
-            (img_normalized[:,:,0] > 0.3) & (img_normalized[:,:,0] < 0.7) &
-            (img_normalized[:,:,1] > 0.3) & (img_normalized[:,:,1] < 0.7) &
-            (img_normalized[:,:,2] > 0.3) & (img_normalized[:,:,2] < 0.7) &
-            (np.abs(img_normalized[:,:,0] - img_normalized[:,:,1]) < 0.15) &
-            (np.abs(img_normalized[:,:,1] - img_normalized[:,:,2]) < 0.15)
+        # Фокусируемся на центральной части (60% центра)
+        center_h_start = height // 5
+        center_h_end = height * 4 // 5
+        center_w_start = width // 5
+        center_w_end = width * 4 // 5
+        
+        center_zone = img_normalized[center_h_start:center_h_end, center_w_start:center_w_end]
+        
+        if center_zone.size == 0:
+            return "🤔 Не могу проанализировать изображение"
+        
+        # Анализируем только центральную зону
+        zone = center_zone
+        total_pixels = zone.shape[0] * zone.shape[1]
+        
+        # Более точные цветовые профили
+        # Волчьи цвета
+        wolf_gray = (
+            (zone[:,:,0] > 0.3) & (zone[:,:,0] < 0.7) &
+            (zone[:,:,1] > 0.3) & (zone[:,:,1] < 0.7) &
+            (zone[:,:,2] > 0.3) & (zone[:,:,2] < 0.7) &
+            (np.abs(zone[:,:,0] - zone[:,:,1]) < 0.15) &
+            (np.abs(zone[:,:,1] - zone[:,:,2]) < 0.15)
         )
         
-        # Коричневые/бежевые (человеческая кожа, одежда) - расширенные
-        skin_brown_mask = (
-            # Кожа человека
-            ((img_normalized[:,:,0] > 0.5) & (img_normalized[:,:,0] < 0.9) &
-             (img_normalized[:,:,1] > 0.35) & (img_normalized[:,:,1] < 0.7) &
-             (img_normalized[:,:,2] > 0.2) & (img_normalized[:,:,2] < 0.5)) |
-            # Одежда (синие, красные, зеленые тона)
-            ((img_normalized[:,:,0] > 0.1) & (img_normalized[:,:,0] < 0.8) &
-             (img_normalized[:,:,1] > 0.1) & (img_normalized[:,:,1] < 0.8) &
-             (img_normalized[:,:,2] > 0.1) & (img_normalized[:,:,2] < 0.8) &
-             (np.abs(img_normalized[:,:,0] - img_normalized[:,:,1]) > 0.2) |
-             (np.abs(img_normalized[:,:,1] - img_normalized[:,:,2]) > 0.2))
+        wolf_black = (
+            (zone[:,:,0] < 0.25) & 
+            (zone[:,:,1] < 0.25) & 
+            (zone[:,:,2] < 0.25)
         )
         
-        # Белые цвета (только чистый белый, не серый)
-        white_mask = (
-            (img_normalized[:,:,0] > 0.85) &
-            (img_normalized[:,:,1] > 0.85) &
-            (img_normalized[:,:,2] > 0.85)
+        # Человеческие цвета (расширенные)
+        human_skin = (
+            # Разные оттенки кожи
+            ((zone[:,:,0] > 0.55) & (zone[:,:,0] < 0.95) &
+             (zone[:,:,1] > 0.35) & (zone[:,:,1] < 0.75) &
+             (zone[:,:,2] > 0.25) & (zone[:,:,2] < 0.55)) |
+            # Светлая кожа
+            ((zone[:,:,0] > 0.85) & (zone[:,:,0] < 0.98) &
+             (zone[:,:,1] > 0.65) & (zone[:,:,1] < 0.85) &
+             (zone[:,:,2] > 0.45) & (zone[:,:,2] < 0.65))
         )
         
-        # Черные цвета (только чистый черный)
-        black_mask = (
-            (img_normalized[:,:,0] < 0.15) &
-            (img_normalized[:,:,1] < 0.15) &
-            (img_normalized[:,:,2] < 0.15)
+        human_hair = (
+            # Темные волосы (не черные)
+            ((zone[:,:,0] > 0.1) & (zone[:,:,0] < 0.4) &
+             (zone[:,:,1] > 0.1) & (zone[:,:,1] < 0.4) &
+             (zone[:,:,2] > 0.1) & (zone[:,:,2] < 0.4)) |
+            # Светлые/рыжие волосы
+            ((zone[:,:,0] > 0.6) & (zone[:,:,0] < 0.9) &
+             (zone[:,:,1] > 0.5) & (zone[:,:,1] < 0.8) &
+             (zone[:,:,2] > 0.3) & (zone[:,:,2] < 0.6))
         )
         
-        total_pixels = img_array.shape[0] * img_array.shape[1]
+        # Яркие цвета (одежда)
+        bright_colors = (
+            (zone[:,:,0] > 0.7) | (zone[:,:,1] > 0.7) | (zone[:,:,2] > 0.7)
+        )
         
-        # Считаем проценты
-        gray_percent = (np.sum(gray_mask) / total_pixels) * 100
-        human_percent = (np.sum(skin_brown_mask) / total_pixels) * 100
-        white_percent = (np.sum(white_mask) / total_pixels) * 100
-        black_percent = (np.sum(black_mask) / total_pixels) * 100
+        # Подсчет баллов
+        wolf_score = (np.sum(wolf_gray) + np.sum(wolf_black)) / total_pixels
+        human_score = (
+            np.sum(human_skin) + 
+            (np.sum(human_hair) * 0.5) + 
+            (np.sum(bright_colors) * 0.3)
+        ) / total_pixels
         
-        # Улучшенная логика классификации
-        wolf_score = (gray_percent * 1.5) + (black_percent * 1.2) + (white_percent * 0.8)
-        human_score = human_percent * 2.0  # Увеличиваем вес человеческих цветов
-        
-        # Балансируем оценку
-        total_score = wolf_score + human_score
-        if total_score == 0:
-            return "🤔 Не могу определить. Изображение слишком сложное для анализа."
-        
-        wolf_confidence = (wolf_score / total_score) * 100
-        human_confidence = (human_score / total_score) * 100
-        
-        # Более высокий порог для волка
-        if wolf_confidence > 60:  # Было 50%
-            result = f"🐺 Это волк! (уверенность: {wolf_confidence:.1f}%)"
-        elif human_confidence > 40:  # Было 50%
-            result = f"👤 Это человек! (уверенность: {human_confidence:.1f}%)"
+        # Принимаем решение
+        if wolf_score > human_score + 0.1:  # Волк должен быть явно доминирующим
+            confidence = (wolf_score / (wolf_score + human_score)) * 100
+            return f"🐺 Это волк! (уверенность: {confidence:.1f}%)"
+        elif human_score > wolf_score + 0.05:  # Человек может быть с небольшим перевесом
+            confidence = (human_score / (wolf_score + human_score)) * 100
+            return f"👤 Это человек! (уверенность: {confidence:.1f}%)"
         else:
-            result = f"🤷 Не уверен... (волк: {wolf_confidence:.1f}%, человек: {human_confidence:.1f}%)"
-        
-        details = (
-            f"\n\n📊 Детальный анализ:\n"
-            f"• Серые оттенки (волк): {gray_percent:.1f}%\n"
-            f"• Человеческие цвета: {human_percent:.1f}%\n"
-            f"• Черные оттенки (волк): {black_percent:.1f}%\n"
-            f"• Белые оттенки: {white_percent:.1f}%\n"
-            f"• Всего пикселей: {total_pixels:,}\n"
-            f"• Оценка волка: {wolf_score:.1f}\n"
-            f"• Оценка человека: {human_score:.1f}"
-        )
-        
-        return result + details
+            return f"🤷 Не могу точно определить (волк: {wolf_score*100:.1f}%, человек: {human_score*100:.1f}%)"
         
     except Exception as e:
         return f"Ошибка при анализе изображения: {e}"
