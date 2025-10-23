@@ -16,64 +16,62 @@ app = Flask(__name__)
 def get_db_connection():
     database_url = os.environ.get('DATABASE_URL')
     
-    if database_url:
-        url = urlparse.urlparse(database_url)
-        dbname = url.path[1:]
-        user = url.username
-        password = url.password
-        host = url.hostname
-        port = url.port
-        
-        conn = psycopg2.connect(
-            dbname=dbname,
-            user=user,
-            password=password,
-            host=host,
-            port=port,
-            sslmode='require'
-        )
-    else:
-        conn = psycopg2.connect(
-            dbname='wolf_bot',
-            user='postgres',
-            password='password',
-            host='localhost'
-        )
+    if not database_url:
+        raise Exception("DATABASE_URL not found in environment variables")
+    
+    # Парсим URL для Railway PostgreSQL
+    url = urlparse.urlparse(database_url)
+    
+    conn = psycopg2.connect(
+        dbname=url.path[1:],  # убираем первый слэш
+        user=url.username,
+        password=url.password,
+        host=url.hostname,
+        port=url.port,
+        sslmode='require'
+    )
     
     return conn
 
 # Инициализация базы данных
 def init_db():
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            chat_id BIGINT PRIMARY KEY,
-            username TEXT,
-            password TEXT,
-            registered_at TIMESTAMP,
-            logged_in BOOLEAN DEFAULT FALSE,
-            predictions_count INTEGER DEFAULT 0,
-            is_admin BOOLEAN DEFAULT FALSE
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Таблица пользователей
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                chat_id BIGINT PRIMARY KEY,
+                username TEXT,
+                password TEXT,
+                registered_at TIMESTAMP,
+                logged_in BOOLEAN DEFAULT FALSE,
+                predictions_count INTEGER DEFAULT 0,
+                is_admin BOOLEAN DEFAULT FALSE
+            )
+        ''')
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("База данных инициализирована")
+    except Exception as e:
+        print(f"Ошибка инициализации БД: {e}")
 
+# Инициализируем БД при запуске
 init_db()
 
 # Функции для работы с базой данных
 def add_user(chat_id, username, password):
     conn = get_db_connection()
-    c = conn.cursor()
+    cur = conn.cursor()
     
-    c.execute("SELECT COUNT(*) FROM users")
-    user_count = c.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM users")
+    user_count = cur.fetchone()[0]
     is_first_user = user_count == 0
     
-    c.execute('''
+    cur.execute('''
         INSERT INTO users (chat_id, username, password, registered_at, is_admin) 
         VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (chat_id) DO UPDATE SET
@@ -82,55 +80,62 @@ def add_user(chat_id, username, password):
     ''', (chat_id, username, password, datetime.now(), is_first_user))
     
     conn.commit()
+    cur.close()
     conn.close()
     return is_first_user
 
 def get_user(chat_id):
     conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('SELECT * FROM users WHERE chat_id = %s', (chat_id,))
-    user = c.fetchone()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM users WHERE chat_id = %s', (chat_id,))
+    user = cur.fetchone()
+    cur.close()
     conn.close()
     return user
 
 def update_login_status(chat_id, status):
     conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('UPDATE users SET logged_in = %s WHERE chat_id = %s', (status, chat_id))
+    cur = conn.cursor()
+    cur.execute('UPDATE users SET logged_in = %s WHERE chat_id = %s', (status, chat_id))
     conn.commit()
+    cur.close()
     conn.close()
 
 def increment_predictions(chat_id):
     conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('UPDATE users SET predictions_count = predictions_count + 1 WHERE chat_id = %s', (chat_id,))
+    cur = conn.cursor()
+    cur.execute('UPDATE users SET predictions_count = predictions_count + 1 WHERE chat_id = %s', (chat_id,))
     conn.commit()
+    cur.close()
     conn.close()
 
 def is_admin(chat_id):
     user = get_user(chat_id)
-    return user and user[6]
+    return user and user[6]  # is_admin is 7th column
 
 def get_all_users():
     conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('SELECT * FROM users ORDER BY registered_at DESC')
-    users = c.fetchall()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM users ORDER BY registered_at DESC')
+    users = cur.fetchall()
+    cur.close()
     conn.close()
     return users
 
 def delete_user(chat_id):
     conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('DELETE FROM users WHERE chat_id = %s', (chat_id,))
+    cur = conn.cursor()
+    cur.execute('DELETE FROM users WHERE chat_id = %s', (chat_id,))
     conn.commit()
+    cur.close()
     conn.close()
 
 def add_admin(chat_id, added_by):
     conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('UPDATE users SET is_admin = TRUE WHERE chat_id = %s', (chat_id,))
+    cur = conn.cursor()
+    cur.execute('UPDATE users SET is_admin = TRUE WHERE chat_id = %s', (chat_id,))
     conn.commit()
+    cur.close()
     conn.close()
 
 # Функция анализа изображения
@@ -185,10 +190,10 @@ def analyze_image_colors(image_path):
         
         if wolf_score > human_score:
             confidence = wolf_score / (wolf_score + human_score) * 100
-            result = f"Это волк! (уверенность: {confidence:.1f}%)"
+            result = f"🐺 Это волк! (уверенность: {confidence:.1f}%)"
         else:
             confidence = human_score / (wolf_score + human_score) * 100
-            result = f"Это человек! (уверенность: {confidence:.1f}%)"
+            result = f"👤 Это человек! (уверенность: {confidence:.1f}%)"
         
         
         
@@ -268,6 +273,7 @@ def process_register_password(message):
 def send_instructions(message):
     instructions_text = (
         "Что же, ищущий да обрящет!\n\n"
+        
         "Команды:\n"
         "🐺 /register — присоединиться к стае\n"
         "🐺 /login — войти в стаю\n"
@@ -340,10 +346,10 @@ def admin_panel(message):
         return
     
     admin_text = (
-        "Панель Вожака стаи:\n\n"
+        "👑 Панель Вожака стаи:\n\n"
         "Статистика:\n"
         "• /stats - Общая статистика\n\n"
-        "Управление волками:\n"
+        "🐺 Управление волками:\n"
         "• /users - Список всей стаи\n"
         "• /add_admin - Добавить Вожака\n"
         "• /delete_user - Изгнать из стаи\n\n"
@@ -393,12 +399,13 @@ def show_users(message):
     for i, user in enumerate(users, 1):
         status = "В стае" if user[4] else "Не в стае"  # logged_in
         admin_flag = " 👑" if user[6] else ""  # is_admin
+        registered_date = user[3].strftime('%Y-%m-%d') if user[3] else 'N/A'
         users_text += (
             f"{i}. {user[1] or 'Без имени'}{admin_flag}\n"
             f"   ID: {user[0]}\n"
             f"   Статус: {status}\n"
             f"   Анализов: {user[5]}\n"
-            f"   В стае с: {user[3].strftime('%Y-%m-%d') if user[3] else 'N/A'}\n\n"
+            f"   В стае с: {registered_date}\n\n"
         )
     
     users_text += "Для удаления используй /delete_user [ID]"
@@ -476,7 +483,7 @@ def process_image_prediction(message):
         return
     
     try:
-        bot.reply_to(message, "🔍 Анализирую цвета...")
+        
         
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
@@ -513,7 +520,7 @@ def webhook():
 
 @app.route('/', methods=['GET'])
 def index():
-    return 'Бот-анализатор цветов с админ-панелью работает! 🐺👑', 200
+    return 'Бот-анализатор цветов с PostgreSQL работает! 🐺👑', 200
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8000))
