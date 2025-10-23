@@ -139,92 +139,73 @@ def add_admin(chat_id, added_by):
     conn.close()
 
 # Функция анализа изображения
-def analyze_image_colors(image_path):
+def analyze_image_for_wolf_strict(image_path):
     try:
         img = Image.open(image_path)
         if img.mode != 'RGB':
             img = img.convert('RGB')
         
-        img_array = np.array(img)
-        height, width = img_array.shape[:2]
+        # Уменьшаем изображение для анализа текстур
+        img_small = img.resize((150, 150))
+        img_array = np.array(img_small)
         img_normalized = img_array / 255.0
         
-        # Фокусируемся на центральной части (60% центра)
-        center_h_start = height // 5
-        center_h_end = height * 4 // 5
-        center_w_start = width // 5
-        center_w_end = width * 4 // 5
+        # Анализируем по зонам
+        height, width = img_normalized.shape[:2]
         
-        center_zone = img_normalized[center_h_start:center_h_end, center_w_start:center_w_end]
+        # Зональный анализ (центр важнее)
+        zones = [
+            (height//4, height*3//4, width//4, width*3//4, 2.0),  # Центр ×2
+            (height//6, height*5//6, width//6, width*5//6, 1.5),  # Средняя ×1.5
+            (0, height, 0, width, 1.0)  # Вся картинка ×1
+        ]
         
-        if center_zone.size == 0:
-            return "🤔 Не могу проанализировать изображение"
+        total_wolf_score = 0
+        total_weight = 0
         
-        # Анализируем только центральную зону
-        zone = center_zone
-        total_pixels = zone.shape[0] * zone.shape[1]
+        for h_start, h_end, w_start, w_end, weight in zones:
+            zone = img_normalized[h_start:h_end, w_start:w_end]
+            if zone.size == 0:
+                continue
+                
+            # СУПЕР-строгие волчьи цвета
+            wolf_colors = (
+                # Идеальные серые (как шерсть)
+                ((zone[:,:,0] > 0.4) & (zone[:,:,0] < 0.6) &
+                 (zone[:,:,1] > 0.4) & (zone[:,:,1] < 0.6) &
+                 (zone[:,:,2] > 0.4) & (zone[:,:,2] < 0.6) &
+                 (np.abs(zone[:,:,0] - zone[:,:,1]) < 0.08) &
+                 (np.abs(zone[:,:,1] - zone[:,:,2]) < 0.08)) |
+                
+                # Темные серые (тени на шерсти)
+                ((zone[:,:,0] > 0.2) & (zone[:,:,0] < 0.45) &
+                 (zone[:,:,1] > 0.2) & (zone[:,:,1] < 0.45) &
+                 (zone[:,:,2] > 0.2) & (zone[:,:,2] < 0.45) &
+                 (np.abs(zone[:,:,0] - zone[:,:,1]) < 0.12) &
+                 (np.abs(zone[:,:,1] - zone[:,:,2]) < 0.12))
+            )
+            
+            wolf_pixels = np.sum(wolf_colors)
+            zone_pixels = zone.shape[0] * zone.shape[1]
+            wolf_score = (wolf_pixels / zone_pixels) * weight
+            
+            total_wolf_score += wolf_score
+            total_weight += weight
         
-        # Более точные цветовые профили
-        # Волчьи цвета
-        wolf_gray = (
-            (zone[:,:,0] > 0.3) & (zone[:,:,0] < 0.7) &
-            (zone[:,:,1] > 0.3) & (zone[:,:,1] < 0.7) &
-            (zone[:,:,2] > 0.3) & (zone[:,:,2] < 0.7) &
-            (np.abs(zone[:,:,0] - zone[:,:,1]) < 0.15) &
-            (np.abs(zone[:,:,1] - zone[:,:,2]) < 0.15)
-        )
+        if total_weight == 0:
+            return "🤔 Не могу проанализировать"
         
-        wolf_black = (
-            (zone[:,:,0] < 0.25) & 
-            (zone[:,:,1] < 0.25) & 
-            (zone[:,:,2] < 0.25)
-        )
+        final_score = (total_wolf_score / total_weight) * 100
         
-        # Человеческие цвета (расширенные)
-        human_skin = (
-            # Разные оттенки кожи
-            ((zone[:,:,0] > 0.55) & (zone[:,:,0] < 0.95) &
-             (zone[:,:,1] > 0.35) & (zone[:,:,1] < 0.75) &
-             (zone[:,:,2] > 0.25) & (zone[:,:,2] < 0.55)) |
-            # Светлая кожа
-            ((zone[:,:,0] > 0.85) & (zone[:,:,0] < 0.98) &
-             (zone[:,:,1] > 0.65) & (zone[:,:,1] < 0.85) &
-             (zone[:,:,2] > 0.45) & (zone[:,:,2] < 0.65))
-        )
-        
-        human_hair = (
-            # Темные волосы (не черные)
-            ((zone[:,:,0] > 0.1) & (zone[:,:,0] < 0.4) &
-             (zone[:,:,1] > 0.1) & (zone[:,:,1] < 0.4) &
-             (zone[:,:,2] > 0.1) & (zone[:,:,2] < 0.4)) |
-            # Светлые/рыжие волосы
-            ((zone[:,:,0] > 0.6) & (zone[:,:,0] < 0.9) &
-             (zone[:,:,1] > 0.5) & (zone[:,:,1] < 0.8) &
-             (zone[:,:,2] > 0.3) & (zone[:,:,2] < 0.6))
-        )
-        
-        # Яркие цвета (одежда)
-        bright_colors = (
-            (zone[:,:,0] > 0.7) | (zone[:,:,1] > 0.7) | (zone[:,:,2] > 0.7)
-        )
-        
-        # Подсчет баллов
-        wolf_score = (np.sum(wolf_gray) + np.sum(wolf_black)) / total_pixels
-        human_score = (
-            np.sum(human_skin) + 
-            (np.sum(human_hair) * 0.5) + 
-            (np.sum(bright_colors) * 0.3)
-        ) / total_pixels
-        
-        # Принимаем решение
-        if wolf_score > human_score + 0.1:  # Волк должен быть явно доминирующим
-            confidence = (wolf_score / (wolf_score + human_score)) * 100
-            return f"🐺 Это волк! (уверенность: {confidence:.1f}%)"
-        elif human_score > wolf_score + 0.05:  # Человек может быть с небольшим перевесом
-            confidence = (human_score / (wolf_score + human_score)) * 100
-            return f"👤 Это человек! (уверенность: {confidence:.1f}%)"
+        # ОЧЕНЬ высокие пороги
+        if final_score > 30:
+            return f"🐺 ДА, ЭТО ВОЛК! (четкие признаки: {final_score:.1f}%)"
+        elif final_score > 20:
+            return f"🐺 Скорее всего волк (признаки: {final_score:.1f}%)"
+        elif final_score > 12:
+            return f"🤔 Возможно волк (слабые признаки: {final_score:.1f}%)"
         else:
-            return f"🤷 Не могу точно определить (волк: {wolf_score*100:.1f}%, человек: {human_score*100:.1f}%)"
+            return f"👤 Не волк (признаков: {final_score:.1f}%)"
         
     except Exception as e:
         return f"Ошибка при анализе изображения: {e}"
