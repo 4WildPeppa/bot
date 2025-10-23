@@ -148,54 +148,60 @@ def analyze_image_colors(image_path):
         height, width = img_array.shape[:2]
         img_normalized = img_array / 255.0
         
-        # Фокусируемся на центральной части
-        center_h_start = height // 4
-        center_h_end = height * 3 // 4
-        center_w_start = width // 4
-        center_w_end = width * 3 // 4
         
-        center_zone = img_normalized[center_h_start:center_h_end, center_w_start:center_w_end]
+        zones = [
+            
+            (height//3, height*2//3, width//3, width*2//3, 3.0),
+              
+            (height//4, height*3//4, width//4, width*3//4, 1.5),
+            
+            (0, height, 0, width, 1.0)
+        ]
         
-        if center_zone.size == 0:
-            return "🤔 Не могу проанализировать изображение"
+        total_wolf_score = 0
+        total_weight = 0
         
-        # Строгие волчьи цвета
-        true_gray = (
-            (center_zone[:,:,0] > 0.35) & (center_zone[:,:,0] < 0.65) &
-            (center_zone[:,:,1] > 0.35) & (center_zone[:,:,1] < 0.65) &
-            (center_zone[:,:,2] > 0.35) & (center_zone[:,:,2] < 0.65) &
-            (np.abs(center_zone[:,:,0] - center_zone[:,:,1]) < 0.1) &
-            (np.abs(center_zone[:,:,1] - center_zone[:,:,2]) < 0.1)
-        )
+        for h_start, h_end, w_start, w_end, weight in zones:
+            zone = img_normalized[h_start:h_end, w_start:w_end]
+            if zone.size == 0:
+                continue
+                
+            
+            wolf_colors = (
+                
+                ((zone[:,:,0] > 0.4) & (zone[:,:,0] < 0.6) &
+                 (zone[:,:,1] > 0.4) & (zone[:,:,1] < 0.6) &
+                 (zone[:,:,2] > 0.4) & (zone[:,:,2] < 0.6) &
+                 (np.abs(zone[:,:,0] - zone[:,:,1]) < 0.08) &
+                 (np.abs(zone[:,:,1] - zone[:,:,2]) < 0.08)) |
+                
+                
+                ((zone[:,:,0] > 0.25) & (zone[:,:,0] < 0.45) &
+                 (zone[:,:,1] > 0.25) & (zone[:,:,1] < 0.45) &
+                 (zone[:,:,2] > 0.25) & (zone[:,:,2] < 0.45) &
+                 (np.abs(zone[:,:,0] - zone[:,:,1]) < 0.1))
+            )
+            
+            wolf_pixels = np.sum(wolf_colors)
+            zone_pixels = zone.shape[0] * zone.shape[1]
+            wolf_score = (wolf_pixels / zone_pixels) * weight
+            
+            total_wolf_score += wolf_score
+            total_weight += weight
         
-        dark_gray = (
-            (center_zone[:,:,0] > 0.15) & (center_zone[:,:,0] < 0.4) &
-            (center_zone[:,:,1] > 0.15) & (center_zone[:,:,1] < 0.4) &
-            (center_zone[:,:,2] > 0.15) & (center_zone[:,:,2] < 0.4) &
-            (np.abs(center_zone[:,:,0] - center_zone[:,:,1]) < 0.15) &
-            (np.abs(center_zone[:,:,1] - center_zone[:,:,2]) < 0.15)
-        )
+        if total_weight == 0:
+            return "🤔 Не могу проанализировать"
         
-        wolf_brown = (
-            (center_zone[:,:,0] > 0.4) & (center_zone[:,:,0] < 0.7) &
-            (center_zone[:,:,1] > 0.3) & (center_zone[:,:,1] < 0.6) &
-            (center_zone[:,:,2] > 0.2) & (center_zone[:,:,2] < 0.5) &
-            (center_zone[:,:,0] > center_zone[:,:,1]) &
-            (center_zone[:,:,1] > center_zone[:,:,2])
-        )
+        wolf_percentage = (total_wolf_score / total_weight) * 100
         
-        total_pixels = center_zone.shape[0] * center_zone.shape[1]
-        wolf_pixels = np.sum(true_gray) + np.sum(dark_gray) + np.sum(wolf_brown)
-        wolf_percentage = (wolf_pixels / total_pixels) * 100
         
-        # ПРОСТАЯ И ПОНЯТНАЯ ЛОГИКА
-        if wolf_percentage > 25:
+        if wolf_percentage > 35:
             return f"🐺 Это волк! (уверенность: {wolf_percentage:.1f}%)"
-        elif wolf_percentage > 15:
+        elif wolf_percentage > 20:
             return f"🐺 Возможно волк (уверенность: {wolf_percentage:.1f}%)"
         else:
             human_confidence = 100 - wolf_percentage
-            return f"👤 Это человек! (уверенность: {human_confidence:.1f}%)"
+            return f"Это человек! (уверенность: {human_confidence:.1f}%)"
         
     except Exception as e:
         return f"Ошибка при обработке изображения: {e}"
