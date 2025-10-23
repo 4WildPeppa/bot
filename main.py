@@ -139,7 +139,7 @@ def add_admin(chat_id, added_by):
     conn.close()
 
 # Функция анализа изображения
-def analyze_image_for_wolf_strict(image_path):
+def analyze_image_colors(image_path):
     try:
         img = Image.open(image_path)
         if img.mode != 'RGB':
